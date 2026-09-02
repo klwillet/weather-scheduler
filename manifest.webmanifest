@@ -1,0 +1,18 @@
+{
+  "name": "Weather Scheduler",
+  "short_name": "Weather Scheduler",
+  "start_url": ".",
+  "scope": "/weather-scheduler/",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#172bff",
+  "description": "An hourly view of weather and a public Google Calendar.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
