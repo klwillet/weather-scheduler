@@ -38,3 +38,7 @@ npm run build
 ## GitHub Pages
 
 The included workflow builds the Vite app and deploys `dist` to GitHub Pages. The Vite base path is already configured as `/weather-scheduler/`.
+
+
+### App icons
+The project includes PNG icons in `public/icons/` for the browser tab, visible app header, iOS home screen, and PWA installation.

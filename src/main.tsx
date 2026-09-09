@@ -276,7 +276,7 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-wrap">
-          <img className="brand-icon" src={`${import.meta.env.BASE_URL}icon.svg`} alt="Weather Scheduler icon" />
+          <img className="brand-icon" src={`${import.meta.env.BASE_URL}icons/icon-192.png`} alt="Weather Scheduler icon" />
           <div>
             <div className="brand">weather-scheduler</div>
             <div className="subbrand">A clean hourly view of weather and your public calendar.</div>
