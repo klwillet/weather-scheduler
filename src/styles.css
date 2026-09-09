@@ -15,7 +15,7 @@ button:disabled { cursor: wait; opacity: .65; }
 .app-shell { width: min(1440px, calc(100% - 32px)); margin: 24px auto 60px; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 6px 4px 24px; }
 .brand-wrap { display: flex; align-items: center; gap: 15px; }
-.brand-icon { width: 58px; height: 58px; filter: drop-shadow(0 7px 12px rgba(28,55,110,.14)); }
+.brand-icon { width: 36px; height: 36px; filter: drop-shadow(0 7px 12px rgba(28,55,110,.14)); }
 .brand { font-size: clamp(29px, 4vw, 46px); line-height: .98; font-weight: 950; letter-spacing: -2.5px; }
 .subbrand { color: #777d86; font-size: 14px; margin-top: 8px; font-weight: 650; }
 .actions { display: flex; gap: 9px; align-items: center; }
@@ -79,7 +79,7 @@ footer { display: flex; justify-content: center; gap: 9px; color: #8a8f97; font-
 @media (max-width: 760px) {
   .app-shell { width: min(100% - 12px, 1440px); margin-top: 8px; }
   .topbar { align-items: flex-start; flex-direction: column; padding-bottom: 16px; }
-  .brand-icon { width: 48px; height: 48px; }
+  .brand-icon { width: 34px; height: 34px; }
   .brand { letter-spacing: -1.7px; }
   .actions { width: 100%; }
   .actions button { flex: 1; }

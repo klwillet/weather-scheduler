@@ -1,631 +1,403 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const CALENDAR_ID = "gcorser@gmail.com";
-const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string;
+type WeatherPoint = {
+  time: string;
+  temperature: number;
+  precipitationProbability: number;
+  weatherCode: number;
+  isDay: number;
+};
 
 type CalendarEvent = {
   id: string;
-  summary?: string;
-  description?: string;
-  location?: string;
-  htmlLink?: string;
-  start: {
-    date?: string;
-    dateTime?: string;
-  };
-  end: {
-    date?: string;
-    dateTime?: string;
-  };
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
 };
 
-type WeatherHour = {
-  time: string;
-  temperature: number;
-  shortForecast: string;
-  precipitationProbability: number;
-  icon: string;
+const DEFAULT_LOCATION = "Bay City, MI 48706";
+const DEFAULT_CALENDAR_ID = "gcorser@gmail.com";
+
+const weatherText = (code: number) => {
+  if (code === 0) return "Clear";
+  if ([1, 2].includes(code)) return "Partly cloudy";
+  if (code === 3) return "Cloudy";
+  if ([45, 48].includes(code)) return "Fog";
+  if ([51, 53, 55, 56, 57].includes(code)) return "Drizzle";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "Rain";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "Snow";
+  if ([95, 96, 99].includes(code)) return "Thunderstorm";
+  return "Weather";
 };
 
-type WeatherDay = {
-  date: string;
-  high: number;
-  low: number;
-  hours: WeatherHour[];
+const weatherIcon = (code: number, isDay = 1) => {
+  if ([95, 96, 99].includes(code)) return "⛈️";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "🌨️";
+  if ([51, 53, 55, 56, 57].includes(code)) return "🌦️";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "🌧️";
+  if ([45, 48].includes(code)) return "🌫️";
+  if (code === 3) return "☁️";
+  if ([1, 2].includes(code)) return isDay ? "🌤️" : "☁️";
+  return isDay ? "☀️" : "🌙";
 };
 
-const DEFAULT_ZIP = "48706";
+const dateKey = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
 
-function formatDate(date: Date) {
-  return date.toLocaleDateString("en-US", {
+const formatDay = (date: Date) =>
+  new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     year: "numeric",
-  });
-}
+  }).format(date);
 
-function dateKey(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
+const formatShortDay = (date: Date) =>
+  new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(date);
 
-  return `${y}-${m}-${d}`;
-}
+const formatHour = (date: Date) =>
+  new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: true }).format(date);
 
-function formatTime(date: Date) {
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+const isSameHour = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate() &&
+  a.getHours() === b.getHours();
 
-function weatherIcon(forecast: string) {
-  const text = forecast.toLowerCase();
+const demoEvents: CalendarEvent[] = [
+  { id: "demo-1", summary: "Example all-day event", start: "2026-09-03T00:00:00", end: "2026-09-04T00:00:00", allDay: true },
+  { id: "demo-2", summary: "Example meeting", start: "2026-09-02T18:00:00", end: "2026-09-02T19:00:00", allDay: false },
+];
 
-  if (text.includes("thunder")) return "⛈️";
-  if (text.includes("snow") || text.includes("sleet")) return "❄️";
-  if (text.includes("rain") || text.includes("shower")) return "🌧️";
-  if (text.includes("fog")) return "🌫️";
-  if (text.includes("cloud")) return "⛅";
-  if (text.includes("sun") || text.includes("clear")) return "☀️";
-
-  return "🌤️";
-}
-
-async function getCoordinates(zip: string) {
-  const response = await fetch(
-    `https://api.zippopotam.us/us/${encodeURIComponent(zip)}`
-  );
-
-  if (!response.ok) {
-    throw new Error("Could not find that ZIP code.");
-  }
-
+async function geocode(query: string) {
+  const url = new URL("https://geocoding-api.open-meteo.com/v1/search");
+  url.searchParams.set("name", query);
+  url.searchParams.set("count", "1");
+  url.searchParams.set("language", "en");
+  url.searchParams.set("format", "json");
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Could not find that location.");
   const data = await response.json();
-
-  if (!data.places?.length) {
-    throw new Error("Could not find that ZIP code.");
-  }
-
-  const place = data.places[0];
-
+  if (!data.results?.length) throw new Error("Location not found.");
+  const place = data.results[0];
   return {
-    latitude: Number(place.latitude),
-    longitude: Number(place.longitude),
-    city: place["place name"],
-    state: place["state abbreviation"],
+    latitude: place.latitude as number,
+    longitude: place.longitude as number,
+    label: [place.name, place.admin1, place.country_code].filter(Boolean).join(", "),
   };
 }
 
-async function getWeather(zip: string): Promise<WeatherDay[]> {
-  const location = await getCoordinates(zip);
-
-  const pointResponse = await fetch(
-    `https://api.weather.gov/points/${location.latitude},${location.longitude}`
-  );
-
-  if (!pointResponse.ok) {
-    throw new Error("Could not find weather information for that location.");
-  }
-
-  const pointData = await pointResponse.json();
-
-  const hourlyResponse = await fetch(
-    pointData.properties.forecastHourly
-  );
-
-  const dailyResponse = await fetch(
-    pointData.properties.forecast
-  );
-
-  if (!hourlyResponse.ok || !dailyResponse.ok) {
-    throw new Error("Weather information could not be loaded.");
-  }
-
-  const hourlyData = await hourlyResponse.json();
-  const dailyData = await dailyResponse.json();
-
-  const hourlyPeriods = hourlyData.properties.periods.slice(0, 72);
-  const dailyPeriods = dailyData.properties.periods;
-
-  const days: Record<string, WeatherDay> = {};
-
-  for (const period of hourlyPeriods) {
-    const date = new Date(period.startTime);
-    const key = dateKey(date);
-
-    if (!days[key]) {
-      days[key] = {
-        date: key,
-        high: 0,
-        low: 0,
-        hours: [],
-      };
-    }
-
-    days[key].hours.push({
-      time: period.startTime,
-      temperature: period.temperature,
-      shortForecast: period.shortForecast,
-      precipitationProbability:
-        period.probabilityOfPrecipitation?.value ?? 0,
-      icon: weatherIcon(period.shortForecast),
-    });
-  }
-
-  for (const period of dailyPeriods) {
-    if (!period.isDaytime) continue;
-
-    const key = dateKey(new Date(period.startTime));
-
-    if (days[key]) {
-      days[key].high = period.temperature;
-    }
-  }
-
-  for (const period of dailyPeriods) {
-    if (period.isDaytime) continue;
-
-    const key = dateKey(new Date(period.startTime));
-
-    if (days[key]) {
-      days[key].low = period.temperature;
-    }
-  }
-
-  return Object.values(days);
-}
-
-async function getCalendarEvents(): Promise<CalendarEvent[]> {
-  if (!GOOGLE_API_KEY) {
-    throw new Error(
-      "Google Calendar API key is missing. Add VITE_GOOGLE_API_KEY to GitHub Actions secrets."
-    );
-  }
-
-  const now = new Date();
-
-  const start = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate()
-  );
-
-  const end = new Date(start);
-  end.setDate(end.getDate() + 7);
-
-  const url =
-    `https://www.googleapis.com/calendar/v3/calendars/` +
-    `${encodeURIComponent(CALENDAR_ID)}/events` +
-    `?timeMin=${encodeURIComponent(start.toISOString())}` +
-    `&timeMax=${encodeURIComponent(end.toISOString())}` +
-    `&singleEvents=true` +
-    `&orderBy=startTime` +
-    `&maxResults=250` +
-    `&key=${encodeURIComponent(GOOGLE_API_KEY)}`;
+async function getWeather(latitude: number, longitude: number) {
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.searchParams.set("latitude", String(latitude));
+  url.searchParams.set("longitude", String(longitude));
+  url.searchParams.set("hourly", "temperature_2m,precipitation_probability,weather_code,is_day");
+  url.searchParams.set("daily", "temperature_2m_max,temperature_2m_min,precipitation_probability_max");
+  url.searchParams.set("temperature_unit", "fahrenheit");
+  url.searchParams.set("timezone", "auto");
+  url.searchParams.set("forecast_days", "8");
 
   const response = await fetch(url);
-
+  if (!response.ok) throw new Error("Weather service unavailable.");
   const data = await response.json();
+  const points: WeatherPoint[] = data.hourly.time.map((time: string, i: number) => ({
+    time,
+    temperature: Math.round(data.hourly.temperature_2m[i]),
+    precipitationProbability: Math.round(data.hourly.precipitation_probability[i] ?? 0),
+    weatherCode: data.hourly.weather_code[i],
+    isDay: data.hourly.is_day[i],
+  }));
+  return { points, daily: data.daily };
+}
 
+async function loadPublicCalendar(calendarId: string, day: Date) {
+  const apiKey = import.meta.env.VITE_GOOGLE_API_KEY;
+  if (!apiKey || apiKey.startsWith("YOUR_")) {
+    throw new Error("Add the Google Calendar API key to VITE_GOOGLE_API_KEY to load the public calendar.");
+  }
+
+  const start = new Date(day);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("timeMin", start.toISOString());
+  url.searchParams.set("timeMax", end.toISOString());
+  url.searchParams.set("singleEvents", "true");
+  url.searchParams.set("orderBy", "startTime");
+  url.searchParams.set("maxResults", "2500");
+  url.searchParams.set("showDeleted", "false");
+  url.searchParams.set("timeZone", Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+  const response = await fetch(url);
+  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      "The public Google Calendar could not be loaded.";
-
-    throw new Error(message);
+    const reason = body?.error?.message || `Google Calendar request failed (${response.status}).`;
+    throw new Error(reason);
   }
 
-  return data.items || [];
-}
-
-function eventsForHour(
-  events: CalendarEvent[],
-  date: Date
-) {
-  const day = dateKey(date);
-  const hour = date.getHours();
-
-  return events.filter((event) => {
-    if (!event.start.dateTime) return false;
-
-    const start = new Date(event.start.dateTime);
-
-    return (
-      dateKey(start) === day &&
-      start.getHours() === hour
-    );
-  });
-}
-
-function allDayEventsForDate(
-  events: CalendarEvent[],
-  date: Date
-) {
-  const key = dateKey(date);
-
-  return events.filter((event) => {
-    if (!event.start.date) return false;
-
-    const start = event.start.date;
-    const end = event.end.date || event.start.date;
-
-    return key >= start && key < end;
-  });
-}
-
-function EventList({
-  events,
-}: {
-  events: CalendarEvent[];
-}) {
-  if (!events.length) {
-    return <span className="empty-event">—</span>;
-  }
-
-  return (
-    <div className="event-list">
-      {events.map((event) => (
-        <a
-          key={event.id}
-          href={event.htmlLink || "#"}
-          target="_blank"
-          rel="noreferrer"
-          className="calendar-event"
-        >
-          {event.summary || "Untitled event"}
-        </a>
-      ))}
-    </div>
-  );
+  return (body.items ?? []).map((e: any): CalendarEvent => ({
+    id: e.id,
+    summary: e.summary || "(No title)",
+    start: e.start?.dateTime ?? e.start?.date,
+    end: e.end?.dateTime ?? e.end?.date,
+    allDay: Boolean(e.start?.date),
+  }));
 }
 
 function App() {
-  const [zip, setZip] = useState(
-    localStorage.getItem("weatherZip") || DEFAULT_ZIP
-  );
-
-  const [location, setLocation] = useState<{
-    city: string;
-    state: string;
-  } | null>(null);
-
-  const [weather, setWeather] = useState<WeatherDay[]>([]);
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [locationText, setLocationText] = useState(DEFAULT_LOCATION);
+  const [location, setLocation] = useState({ latitude: 43.5945, longitude: -83.8889, label: DEFAULT_LOCATION });
+  const [weather, setWeather] = useState<{ points: WeatherPoint[]; daily: any } | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-
   const [loading, setLoading] = useState(true);
-  const [calendarLoading, setCalendarLoading] = useState(true);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const [calendarStatus, setCalendarStatus] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentHour, setCurrentHour] = useState(new Date());
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const [weatherError, setWeatherError] = useState("");
-  const [calendarError, setCalendarError] = useState("");
+  useEffect(() => {
+    setLoading(true);
+    getWeather(location.latitude, location.longitude)
+      .then(setWeather)
+      .catch((e) => setStatus(e.message))
+      .finally(() => setLoading(false));
+  }, [location]);
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    const id = window.setInterval(() => setCurrentHour(new Date()), 30000);
+    return () => window.clearInterval(id);
+  }, []);
 
-  const [selectedDate, setSelectedDate] = useState(
-    dateKey(new Date())
-  );
-
-  async function loadWeather(zipCode: string) {
+  async function refreshCalendar() {
+    setCalendarLoading(true);
+    setCalendarStatus("");
     try {
-      setWeatherError("");
-
-      const coordinates = await getCoordinates(zipCode);
-
-      setLocation({
-        city: coordinates.city,
-        state: coordinates.state,
-      });
-
-      const forecast = await getWeather(zipCode);
-
-      setWeather(forecast);
-
-      localStorage.setItem("weatherZip", zipCode);
-    } catch (error) {
-      setWeatherError(
-        error instanceof Error
-          ? error.message
-          : "Weather could not be loaded."
-      );
-    }
-  }
-
-  async function loadCalendar() {
-    try {
-      setCalendarLoading(true);
-      setCalendarError("");
-
-      const calendarEvents = await getCalendarEvents();
-
-      setEvents(calendarEvents);
-    } catch (error) {
-      setCalendarError(
-        error instanceof Error
-          ? error.message
-          : "Calendar could not be loaded."
-      );
+      const nextEvents = await loadPublicCalendar(DEFAULT_CALENDAR_ID, selectedDate);
+      setEvents(nextEvents);
+      setCalendarStatus(nextEvents.length ? `${nextEvents.length} calendar event${nextEvents.length === 1 ? "" : "s"} loaded.` : "No public events scheduled for this day.");
+    } catch (e: any) {
+      setEvents([]);
+      setCalendarStatus(e.message || "Could not load the public calendar.");
     } finally {
       setCalendarLoading(false);
     }
   }
 
   useEffect(() => {
-    async function load() {
-      setLoading(true);
+    refreshCalendar();
+  }, [selectedDate]);
 
-      await Promise.all([
-        loadWeather(zip),
-        loadCalendar(),
-      ]);
-
-      setLoading(false);
+  useEffect(() => {
+    const key = `${dateKey(currentHour)}T${String(currentHour.getHours()).padStart(2, "0")}:00`;
+    const row = rowRefs.current[key];
+    if (row && dateKey(currentHour) === dateKey(selectedDate)) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
     }
+  }, [weather, selectedDate, currentHour]);
 
-    load();
-  }, []);
+  const dayPoints = useMemo(() => {
+    if (!weather) return [];
+    const key = dateKey(selectedDate);
+    return weather.points.filter((p) => p.time.startsWith(key));
+  }, [weather, selectedDate]);
 
-  const selectedDay = useMemo(
-    () => weather.find((day) => day.date === selectedDate),
-    [weather, selectedDate]
-  );
+  const dayEvents = useMemo(() => {
+    const start = new Date(selectedDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return events.filter((e) => {
+      const s = new Date(e.start);
+      const en = new Date(e.end);
+      return s < end && en > start;
+    });
+  }, [events, selectedDate]);
 
-  const selectedDateObject = new Date(`${selectedDate}T00:00:00`);
+  const dailySummary = useMemo(() => {
+    if (!weather) return null;
+    const index = weather.daily.time.findIndex((d: string) => d === dateKey(selectedDate));
+    if (index < 0) return null;
+    return {
+      high: Math.round(weather.daily.temperature_2m_max[index]),
+      low: Math.round(weather.daily.temperature_2m_min[index]),
+      rain: Math.round(weather.daily.precipitation_probability_max[index] ?? 0),
+    };
+  }, [weather, selectedDate]);
 
-  const allDayEvents = allDayEventsForDate(
-    events,
-    selectedDateObject
-  );
-
-  function changeDay(offset: number) {
-    const current = new Date(`${selectedDate}T00:00:00`);
-
-    current.setDate(current.getDate() + offset);
-
-    setSelectedDate(dateKey(current));
+  function eventsForHour(hour: Date) {
+    const start = new Date(hour);
+    const end = new Date(hour);
+    end.setHours(end.getHours() + 1);
+    return dayEvents.filter((e) => {
+      if (e.allDay) return false;
+      return new Date(e.start) < end && new Date(e.end) > start;
+    });
   }
 
-  async function handleLocationSubmit(
-    event: React.FormEvent<HTMLFormElement>
-  ) {
-    event.preventDefault();
+  const allDayEvents = dayEvents.filter((e) => e.allDay);
+  const isToday = dateKey(selectedDate) === dateKey(new Date());
 
-    const form = new FormData(event.currentTarget);
-    const newZip = String(form.get("zip") || "").trim();
+  function moveDay(delta: number) {
+    setSelectedDate((prev) => {
+      const d = new Date(prev);
+      d.setDate(d.getDate() + delta);
+      return d;
+    });
+  }
 
-    if (!/^\d{5}$/.test(newZip)) {
-      setWeatherError("Please enter a five-digit ZIP code.");
-      return;
+  async function changeLocation() {
+    try {
+      setStatus("Finding location…");
+      const result = await geocode(locationText);
+      setLocation(result);
+      setStatus(`Weather location set to ${result.label}.`);
+    } catch (e: any) {
+      setStatus(e.message);
     }
-
-    await loadWeather(newZip);
-    setSettingsOpen(false);
   }
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="brand">
-          <img
-            src={`${import.meta.env.BASE_URL}icons/icon-192.png`}
-            alt=""
-            className="app-icon"
-          />
-
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-wrap">
+          <img className="brand-icon" src={`${import.meta.env.BASE_URL}icons/icon-192.png`} alt="Weather Scheduler icon" />
           <div>
-            <div className="app-name">Weather Scheduler</div>
-            <div className="app-subtitle">
-              Weather + George Corser's schedule
-            </div>
+            <div className="brand">weather-scheduler</div>
+            <div className="subbrand">A clean hourly view of weather and your public calendar.</div>
           </div>
         </div>
-
-        <button
-          className="settings-button"
-          onClick={() => setSettingsOpen(!settingsOpen)}
-          aria-label="Open settings"
-        >
-          ⚙️
-        </button>
+        <div className="actions">
+          <button className="ghost-button" onClick={() => setShowSettings((v) => !v)}>{showSettings ? "Close settings" : "Settings"}</button>
+          <button className="primary-button" onClick={refreshCalendar} disabled={calendarLoading}>
+            {calendarLoading ? "Refreshing…" : "Refresh calendar"}
+          </button>
+        </div>
       </header>
 
-      {settingsOpen && (
-        <section className="settings-panel">
-          <form onSubmit={handleLocationSubmit}>
-            <label htmlFor="zip">
-              Weather location
+      {showSettings && (
+        <section className="settings-card">
+          <div className="settings-title">Schedule settings</div>
+          <div className="settings-grid">
+            <label>
+              <span>Weather location</span>
+              <div className="location-control">
+                <input value={locationText} onChange={(e) => setLocationText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && changeLocation()} />
+                <button onClick={changeLocation}>Update</button>
+              </div>
             </label>
-
-            <div className="settings-row">
-              <input
-                id="zip"
-                name="zip"
-                defaultValue={zip}
-                placeholder="ZIP code"
-                maxLength={5}
-              />
-
-              <button type="submit">
-                Change
-              </button>
-            </div>
-          </form>
-
-          <div className="calendar-setting">
-            <strong>Calendar</strong>
-
-            <span>
-              George Corser's public Google Calendar
-            </span>
+            <label>
+              <span>Public Google Calendar</span>
+              <input value="George Corser's public calendar" readOnly />
+            </label>
           </div>
+          <div className="settings-note">No Google sign-in is used. The calendar must be public and visible to anyone with access to its public calendar data.</div>
         </section>
       )}
 
-      <main>
-        <section className="schedule-heading">
-          <div>
-            <div className="eyebrow">SCHEDULE</div>
-
-            <h1>
-              {formatDate(selectedDateObject)}
-            </h1>
-
-            {location && (
-              <p className="location">
-                📍 {location.city}, {location.state}
-              </p>
-            )}
+      <section className="hero">
+        <div>
+          <div className="eyebrow">HOURLY PLANNER</div>
+          <div className="date-title">{formatDay(selectedDate)}</div>
+          <div className="summary-line">
+            {dailySummary ? `High ${dailySummary.high}°  ·  Low ${dailySummary.low}°  ·  Max rain ${dailySummary.rain}%` : "Loading forecast…"}
           </div>
+          <div className="location-line">{location.label}</div>
+        </div>
+        <div className="day-controls">
+          <button className="circle-button" onClick={() => moveDay(-1)} aria-label="Previous day">‹</button>
+          <button className={isToday ? "day-button active" : "day-button"} onClick={() => setSelectedDate(new Date())}>Today</button>
+          <button className="circle-button" onClick={() => moveDay(1)} aria-label="Next day">›</button>
+        </div>
+      </section>
 
-          <div className="day-controls">
-            <button
-              onClick={() => changeDay(-1)}
-              aria-label="Previous day"
-            >
-              ←
-            </button>
+      {(status || calendarStatus) && (
+        <div className="status-stack">
+          {status && <div className="status" role="status">{status}</div>}
+          {calendarStatus && <div className="status calendar-status" role="status">{calendarStatus}</div>}
+        </div>
+      )}
 
-            <button
-              onClick={() => setSelectedDate(dateKey(new Date()))}
-            >
-              Today
-            </button>
-
-            <button
-              onClick={() => changeDay(1)}
-              aria-label="Next day"
-            >
-              →
-            </button>
-          </div>
-        </section>
-
-        {weatherError && (
-          <div className="error-message">
-            {weatherError}
-          </div>
-        )}
-
-        {calendarError && (
-          <div className="error-message">
-            Google Calendar: {calendarError}
-          </div>
-        )}
-
-        {calendarLoading && (
-          <div className="loading-message">
-            Loading calendar…
-          </div>
-        )}
-
-        <div className="schedule-card">
-          <div className="schedule-header">
-            <div>TIME</div>
-            <div>WEATHER</div>
-            <div>CALENDAR</div>
-          </div>
-
-          {loading ? (
-            <div className="loading-row">
-              Loading weather…
-            </div>
-          ) : !selectedDay ? (
-            <div className="loading-row">
-              No weather information is available for this date.
-            </div>
-          ) : (
-            <>
-              {allDayEvents.length > 0 && (
-                <div className="all-day-row">
-                  <div className="all-day-label">
-                    ALL DAY
-                  </div>
-
-                  <div className="all-day-events">
-                    <EventList events={allDayEvents} />
-                  </div>
-                </div>
-              )}
-
-              {selectedDay.hours.map((hour) => {
-                const date = new Date(hour.time);
-
-                const hourEvents = eventsForHour(
-                  events,
-                  date
-                );
-
-                const isCurrentHour =
-                  dateKey(new Date()) ===
-                    selectedDate &&
-                  new Date().getHours() ===
-                    date.getHours();
-
-                return (
-                  <div
-                    className={`schedule-row ${
-                      isCurrentHour
-                        ? "current-hour"
-                        : ""
-                    }`}
-                    key={hour.time}
-                  >
-                    <div className="time-cell">
-                      {formatTime(date)}
-                    </div>
-
-                    <div className="weather-cell">
-                      <span className="weather-icon">
-                        {hour.icon}
-                      </span>
-
-                      <span className="temperature">
-                        {hour.temperature}°
-                      </span>
-
-                      <span className="forecast">
-                        {hour.shortForecast}
-                      </span>
-
-                      {hour.precipitationProbability >
-                        0 && (
-                        <span className="rain">
-                          {hour.precipitationProbability}%
-                          rain
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="calendar-cell">
-                      <EventList
-                        events={hourEvents}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </>
-          )}
+      <section className="schedule-card">
+        <div className="schedule-header">
+          <div>Time</div>
+          <div>Weather</div>
+          <div>Calendar</div>
         </div>
 
-        <footer className="app-footer">
-          <span>
-            Weather Scheduler
-          </span>
+        <div className="day-banner">
+          <div>{isToday ? "Today" : formatShortDay(selectedDate)}</div>
+          <div>{dailySummary ? `${dailySummary.high}° / ${dailySummary.low}°` : "—"}</div>
+          <div><span className="calendar-dot" /> Public calendar</div>
+        </div>
 
-          <span>
-            Public calendar · Updated automatically
-          </span>
-        </footer>
-      </main>
-    </div>
+        {allDayEvents.length > 0 && (
+          <div className="all-day-row">
+            <div className="all-day-label">ALL DAY</div>
+            <div />
+            <div className="all-day-events">
+              {allDayEvents.map((e) => <span key={e.id}>{e.summary}</span>)}
+            </div>
+          </div>
+        )}
+
+        {loading && <div className="loading-row">Loading hourly forecast…</div>}
+
+        {!loading && dayPoints.map((point) => {
+          const d = new Date(point.time);
+          const current = isSameHour(d, currentHour) && isToday;
+          const hourEvents = eventsForHour(d);
+          return (
+            <div
+              className={`schedule-row ${current ? "current" : ""}`}
+              key={point.time}
+              ref={(el) => { rowRefs.current[point.time] = el; }}
+            >
+              <div className="time-cell">
+                {current && <span className="now-dot" />}
+                <strong>{formatHour(d)}</strong>
+              </div>
+              <div className="weather-cell">
+                <span className="temperature">{point.temperature}°</span>
+                <span className="weather-icon" title={weatherText(point.weatherCode)}>{weatherIcon(point.weatherCode, point.isDay)}</span>
+                <span className="rain">{point.precipitationProbability}% rain</span>
+              </div>
+              <div className="calendar-cell">
+                {hourEvents.length ? hourEvents.map((e) => (
+                  <div className="event-chip" key={e.id}>
+                    <span className="event-bar" />
+                    <span>{e.summary}</span>
+                  </div>
+                )) : <span className="empty-event">—</span>}
+              </div>
+            </div>
+          );
+        })}
+
+        {!loading && !dayPoints.length && (
+          <div className="empty-state">No hourly forecast is available for this date.</div>
+        )}
+      </section>
+
+      <footer>
+        <span>Weather by Open-Meteo</span><span>·</span><span>Public calendar by Google Calendar</span>
+      </footer>
+    </main>
   );
 }
 
 createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+  <React.StrictMode><App /></React.StrictMode>
 );
